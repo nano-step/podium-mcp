@@ -166,6 +166,7 @@ export function _resetNativeCache(): void {
   cachedMobilecli = undefined;
   cachedBackend = undefined;
   screenPointsCache.clear();
+  mobilecliAgentReady.clear();
 }
 
 // ─── mobilecli backend ───────────────────────────────────────────────────────
@@ -180,16 +181,49 @@ const MOBILECLI_BUTTONS: Record<string, string> = {
 };
 
 const screenPointsCache = new Map<string, { w: number; h: number; at: number }>();
+const mobilecliAgentReady = new Set<string>();
+
+/**
+ * Ensure the mobilecli XCTest agent exists before using native UI actions.
+ *
+ * mobilecli can be installed and discoverable while its on-device agent is
+ * absent. In that state `dump ui` and native gestures fail, and callers used
+ * to silently fall back to Maestro (which cannot reliably dispatch custom RN
+ * buttons by text). Installing the agent is scoped to the requested simulator
+ * and is idempotent.
+ */
+async function ensureMobilecliAgent(bin: string, udid: string): Promise<boolean> {
+  if (mobilecliAgentReady.has(udid)) return true;
+
+  const status = await run(bin, ["agent", "status", "--device", udid], { timeout: 20_000 });
+  if (status.code === 0) {
+    mobilecliAgentReady.add(udid);
+    return true;
+  }
+
+  const install = await run(bin, ["agent", "install", "--device", udid], { timeout: 90_000 });
+  if (install.code !== 0) return false;
+
+  mobilecliAgentReady.add(udid);
+  return true;
+}
 
 function makeMobilecliBackend(bin: string): NativeBackend {
   return {
     name: "mobilecli",
-    tap: (udid, x, y) =>
-      run(bin, ["io", "tap", `${Math.round(x)},${Math.round(y)}`, "--device", udid], {
+    tap: async (udid, x, y) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) {
+        return { code: 1, stdout: "", stderr: "mobilecli agent is not available" };
+      }
+      return run(bin, ["io", "tap", `${Math.round(x)},${Math.round(y)}`, "--device", udid], {
         timeout: 15_000,
-      }),
-    swipe: (udid, x1, y1, x2, y2) =>
-      run(
+      });
+    },
+    swipe: async (udid, x1, y1, x2, y2) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) {
+        return { code: 1, stdout: "", stderr: "mobilecli agent is not available" };
+      }
+      return run(
         bin,
         [
           "io",
@@ -199,16 +233,23 @@ function makeMobilecliBackend(bin: string): NativeBackend {
           udid,
         ],
         { timeout: 20_000 }
-      ),
-    inputText: (udid, text) =>
-      run(bin, ["io", "text", text, "--device", udid], { timeout: 15_000 }),
+      );
+    },
+    inputText: async (udid, text) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) {
+        return { code: 1, stdout: "", stderr: "mobilecli agent is not available" };
+      }
+      return run(bin, ["io", "text", text, "--device", udid], { timeout: 15_000 });
+    },
     canPressKey: (key) => MOBILECLI_BUTTONS[key] !== undefined,
     pressKey: async (udid, key) => {
       const button = MOBILECLI_BUTTONS[key];
       if (!button) return null;
+      if (!(await ensureMobilecliAgent(bin, udid))) return null;
       return run(bin, ["io", "button", button, "--device", udid], { timeout: 10_000 });
     },
     describeAll: async (udid) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) return null;
       const r = await run(bin, ["dump", "ui", "--device", udid], { timeout: 20_000 });
       if (r.code !== 0) return null;
       try {
@@ -259,6 +300,7 @@ function makeMobilecliBackend(bin: string): NativeBackend {
       }
     },
     setOrientation: async (udid, value) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) return null;
       const mapped =
         value === "PORTRAIT" ? "portrait" : value.startsWith("LANDSCAPE") ? "landscape" : null;
       if (!mapped) return null; // UPSIDE_DOWN etc. → Maestro fallback
@@ -267,6 +309,7 @@ function makeMobilecliBackend(bin: string): NativeBackend {
       });
     },
     getOrientation: async (udid) => {
+      if (!(await ensureMobilecliAgent(bin, udid))) return null;
       const r = await run(bin, ["device", "orientation", "get", "--device", udid], {
         timeout: 10_000,
       });

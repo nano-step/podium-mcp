@@ -3,6 +3,41 @@ import { getHierarchy, runMaestroFlow } from "../lib/maestro.js";
 import { run } from "../lib/exec.js";
 import { getBackend, findElements, elementCenter } from "../lib/native.js";
 import { nativeTap } from "../lib/gesture.js";
+function textMatches(raw, selector) {
+    try {
+        return new RegExp(`^(?:${selector})$`, "i").test(raw);
+    }
+    catch {
+        return raw.toLowerCase().includes(selector.toLowerCase());
+    }
+}
+/** Resolve a Maestro hierarchy text/id node to a native-tappable center. */
+function findHierarchyPoint(root, selector, index = 0) {
+    const matches = [];
+    const visit = (node) => {
+        if (!node || typeof node !== "object")
+            return;
+        const n = node;
+        const a = n.attributes ?? {};
+        const id = String(a["resource-id"] ?? a["id"] ?? "");
+        const text = [a["text"], a["accessibilityText"], a["title"], a["value"]]
+            .filter((v) => typeof v === "string" && v.length > 0)
+            .join(" ");
+        const selectorMatches = (selector.id && id === selector.id) ||
+            (selector.text && textMatches(text, selector.text));
+        const bounds = typeof a["bounds"] === "string" ? /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(a["bounds"]) : null;
+        if (selectorMatches && bounds) {
+            matches.push({
+                x: (Number(bounds[1]) + Number(bounds[3])) / 2,
+                y: (Number(bounds[2]) + Number(bounds[4])) / 2,
+            });
+        }
+        for (const child of n.children ?? [])
+            visit(child);
+    };
+    visit(root);
+    return matches[index] ?? null;
+}
 /** Parse "35%" against a span, or a plain number string verbatim. Null on junk. */
 function resolveCoord(raw, span) {
     const pct = /^(\d+(?:\.\d+)?)%$/.exec(raw.trim());
@@ -189,6 +224,22 @@ export function registerScreenTools(server) {
                 const r = await be.tap(udid, point.x, point.y);
                 if (r.code === 0) {
                     return okResult({ ok: true, cmd, selector, backend: be.name, tappedAt: point });
+                }
+            }
+            // Custom React Native buttons often expose visible text in Maestro's
+            // hierarchy but not as an actionable native accessibility element.
+            // Resolve the text bounds from that hierarchy, then use the native
+            // backend for the actual tap so the button's press handler dispatches.
+            if (!point && !isLong && !isDouble && (text || id)) {
+                const hierarchy = await getHierarchy(udid);
+                if (hierarchy.ok) {
+                    point = findHierarchyPoint(hierarchy.json, { text, id }, index ?? 0);
+                    if (point) {
+                        const r = await be.tap(udid, point.x, point.y);
+                        if (r.code === 0) {
+                            return okResult({ ok: true, cmd, selector, backend: `${be.name}+hierarchy`, tappedAt: point });
+                        }
+                    }
                 }
             }
         }

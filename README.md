@@ -6,6 +6,11 @@
 
 A single stdio endpoint with **33 tools** for iOS-simulator device control, native UI automation, end-to-end flows, React Native debugging, and WebView DOM inspection — one connection instead of several.
 
+On iOS, native UI actions automatically verify the bundled mobilecli XCTest
+agent for the requested simulator and install it when missing. This keeps
+text-based actions on the native accessibility path instead of silently
+falling back to Maestro for custom React Native controls.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)](package.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](tsconfig.json)

@@ -55,3 +55,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - 61 unit tests (vitest); TypeScript strict; no type suppression.
 
 [0.1.0]: https://github.com/hoainho/podium-mcp/releases/tag/v0.1.0
+# Unreleased
+
+- Automatically verify and install the mobilecli XCTest agent for the target
+  simulator before native UI actions. This prevents a silently unavailable
+  native backend from falling back to Maestro text taps, which are unreliable
+  for custom React Native buttons.
